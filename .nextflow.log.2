@@ -1,0 +1,62 @@
+Jun-11 23:26:50.321 [main] DEBUG nextflow.cli.Launcher - $> nextflow run EBISPOT/gwas-sumstats-harmoniser -r v1.1.10 --ref /mnt/hdd_1/ofgeha/gwas-sumstats-harmoniser/data/gwas_harm_ref --harm --file /mnt/hdd_1/ofgeha/gwas-sumstats-harmoniser/data/sumstats/21001_raw.gwas.imputed_v3.both_sexes.tsv.bgz --chromlist 22 --terminate_error ignore -profile standard,docker
+Jun-11 23:26:50.428 [main] DEBUG nextflow.cli.CmdRun - N E X T F L O W  ~  version 25.04.8
+Jun-11 23:26:50.455 [main] DEBUG nextflow.plugin.PluginsFacade - Setting up plugin manager > mode=prod; embedded=false; plugins-dir=/home/icog-bioai2/.nextflow/plugins; core-plugins: nf-amazon@2.15.0-patch2,nf-azure@1.16.0-patch1,nf-cloudcache@0.4.3,nf-codecommit@0.2.3,nf-console@1.2.1,nf-google@1.21.1,nf-k8s@1.0.1,nf-tower@1.11.4-patch2,nf-wave@1.12.1
+Jun-11 23:26:50.477 [main] INFO  o.pf4j.DefaultPluginStatusProvider - Enabled plugins: []
+Jun-11 23:26:50.478 [main] INFO  o.pf4j.DefaultPluginStatusProvider - Disabled plugins: []
+Jun-11 23:26:50.481 [main] INFO  org.pf4j.DefaultPluginManager - PF4J version 3.12.0 in 'deployment' mode
+Jun-11 23:26:50.492 [main] INFO  org.pf4j.AbstractPluginManager - No plugins
+Jun-11 23:26:50.504 [main] DEBUG nextflow.scm.ProviderConfig - Using SCM config path: /home/icog-bioai2/.nextflow/scm
+Jun-11 23:26:51.230 [main] DEBUG nextflow.scm.AssetManager - Git config: /home/icog-bioai2/.nextflow/assets/EBISPOT/gwas-sumstats-harmoniser/.git/config; branch: nextflow; remote: origin; url: https://github.com/EBISPOT/gwas-sumstats-harmoniser.git
+Jun-11 23:26:51.262 [main] DEBUG nextflow.scm.RepositoryFactory - Found Git repository result: [RepositoryFactory]
+Jun-11 23:26:51.272 [main] DEBUG nextflow.scm.AssetManager - Git config: /home/icog-bioai2/.nextflow/assets/EBISPOT/gwas-sumstats-harmoniser/.git/config; branch: nextflow; remote: origin; url: https://github.com/EBISPOT/gwas-sumstats-harmoniser.git
+Jun-11 23:26:51.988 [main] DEBUG nextflow.config.ConfigBuilder - Found config base: /home/icog-bioai2/.nextflow/assets/EBISPOT/gwas-sumstats-harmoniser/nextflow.config
+Jun-11 23:26:51.988 [main] DEBUG nextflow.config.ConfigBuilder - Found config local: /mnt/hdd_1/ofgeha/harmoni/gwas-sumstats-harmoniser/nextflow.config
+Jun-11 23:26:51.990 [main] DEBUG nextflow.config.ConfigBuilder - Parsing config file: /home/icog-bioai2/.nextflow/assets/EBISPOT/gwas-sumstats-harmoniser/nextflow.config
+Jun-11 23:26:51.990 [main] DEBUG nextflow.config.ConfigBuilder - Parsing config file: /mnt/hdd_1/ofgeha/harmoni/gwas-sumstats-harmoniser/nextflow.config
+Jun-11 23:26:51.998 [main] DEBUG n.secret.LocalSecretsProvider - Secrets store: /home/icog-bioai2/.nextflow/secrets/store.json
+Jun-11 23:26:52.002 [main] DEBUG nextflow.secret.SecretsLoader - Discovered secrets providers: [nextflow.secret.LocalSecretsProvider@3dce6dd8] - activable => nextflow.secret.LocalSecretsProvider@3dce6dd8
+Jun-11 23:26:52.014 [main] DEBUG nextflow.config.ConfigBuilder - Applying config profile: `standard,docker`
+Jun-11 23:26:52.390 [main] ERROR nextflow.cli.Launcher - Unable to parse config file: '/home/icog-bioai2/.nextflow/assets/EBISPOT/gwas-sumstats-harmoniser/nextflow.config'
+
+  No signature of method: java.lang.Integer.tokenize() is applicable for argument types: (String) values: [,]
+
+groovy.lang.MissingMethodException: No signature of method: java.lang.Integer.tokenize() is applicable for argument types: (String) values: [,]
+	at org.codehaus.groovy.runtime.ScriptBytecodeAdapter.unwrap(ScriptBytecodeAdapter.java:72)
+	at org.codehaus.groovy.vmplugin.v8.IndyGuardsFiltersAndSignatures.unwrap(IndyGuardsFiltersAndSignatures.java:163)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.fromCache(IndyInterface.java:321)
+	at _nf_config_6d8b0440.run(_nf_config_6d8b0440:73)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:569)
+	at org.codehaus.groovy.reflection.CachedMethod.invoke(CachedMethod.java:343)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.fromCache(IndyInterface.java:321)
+	at nextflow.config.parser.v1.ConfigParserV1$_parse_closure5.doCall(ConfigParserV1.groovy:436)
+	at jdk.internal.reflect.GeneratedMethodAccessor7.invoke(Unknown Source)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:569)
+	at org.codehaus.groovy.reflection.CachedMethod.invoke(CachedMethod.java:343)
+	at org.codehaus.groovy.runtime.metaclass.ClosureMetaMethod.invoke(ClosureMetaMethod.java:88)
+	at groovy.lang.ExpandoMetaClass.invokeMethod(ExpandoMetaClass.java:1140)
+	at groovy.lang.MetaClassImpl.invokeMethod(MetaClassImpl.java:1007)
+	at groovy.lang.DelegatingMetaClass.invokeMethod(DelegatingMetaClass.java:165)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.selectMethod(IndyInterface.java:355)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.fromCache(IndyInterface.java:321)
+	at nextflow.config.parser.v1.ConfigParserV1.parse(ConfigParserV1.groovy:465)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.fromCache(IndyInterface.java:321)
+	at nextflow.config.parser.v1.ConfigParserV1.parse(ConfigParserV1.groovy:291)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.fromCache(IndyInterface.java:321)
+	at nextflow.config.ConfigBuilder.parse0(ConfigBuilder.groovy:432)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.fromCache(IndyInterface.java:321)
+	at nextflow.config.ConfigBuilder.merge0(ConfigBuilder.groovy:417)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.fromCache(IndyInterface.java:321)
+	at nextflow.config.ConfigBuilder.buildConfig0(ConfigBuilder.groovy:374)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.fromCache(IndyInterface.java:321)
+	at nextflow.config.ConfigBuilder.buildGivenFiles(ConfigBuilder.groovy:318)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.fromCache(IndyInterface.java:321)
+	at nextflow.config.ConfigBuilder.buildConfigObject(ConfigBuilder.groovy:816)
+	at org.codehaus.groovy.vmplugin.v8.IndyInterface.fromCache(IndyInterface.java:321)
+	at nextflow.config.ConfigBuilder.build(ConfigBuilder.groovy:829)
+	at nextflow.cli.CmdRun.run(CmdRun.groovy:333)
+	at nextflow.cli.Launcher.run(Launcher.groovy:513)
+	at nextflow.cli.Launcher.main(Launcher.groovy:673)
