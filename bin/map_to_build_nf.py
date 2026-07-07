@@ -45,18 +45,18 @@ def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate):
 
     Parameters:
     - ss (str): Path to summary statistics file
-    - vcf (str): Glob pattern for reference VCF Parquet files
+    - vcf (str): Glob pattern or exact path for reference VCF Parquet file(s)
     - from_build (str): Genome build of the summary stats
     - to_build (str): Target genome build for output
     - chroms (list[str]): List of chromosomes to write output for
-    - coordinate: (Unused)
+    - coordinate: coordinate system string
     """
 
     vcfs = glob.glob(vcf)
     # read input sumstats file using the duckdb and convert the 23,24,25 into X,Y,MT in the chromsome column
     normalized_chroms = [normalize_chrom(c) for c in chroms]
     chrom_filter = ",".join(f"'{c}'" for c in normalized_chroms)
-    
+
     query = f"""
     SELECT *
     FROM (
@@ -76,9 +76,13 @@ def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate):
     con = duckdb.connect()
     ssdf = con.execute(query).df()
 
-    # handle the empty input file
+    # handle the empty input file — still create output files so Nextflow output checks pass
     if ssdf.empty:
         print("No records in input summary statistics file.")
+        for chrom in normalized_chroms:
+            chrom_str = str(chrom).split(".")[0]
+            open(f"{chrom_str}.merged", "w").close()
+        open("unmapped", "w").close()
         return
 
     add_fields_if_missing(df=ssdf)
@@ -90,45 +94,37 @@ def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate):
     print("starting rsid mapping")
     print("ssdf with rsid empty?: {}".format(ssdf_with_rsid.empty))
 
-    # if there are records with rsids
-    # Initialize an empty DataFrame for merged results 
+    # Single-pass LEFT JOIN: matched rows get CHR_src/POS_src, unmatched get NULL.
+    # This replaces the previous two-query pattern (join + anti-join) and halves
+    # the number of parquet scans.
     merged_vcf = pd.DataFrame()
     if not ssdf_with_rsid.empty:
-        # registers a data frame as a virtual table (view) in a DuckDB connection
         con.register("ssdf_rsid", ssdf_with_rsid)
 
-        # Read the reference VCF files and create a union of them
         files_sql = "[" + ", ".join(f"'{f}'" for f in vcfs) + "]"
         vcf_view = f"(SELECT * FROM read_parquet({files_sql}, union_by_name=true))"
 
-
-         # Step 3: Join once across all VCFs
-        merged_vcf = con.execute(f"""
-            SELECT 
-                ssdf_rsid.*, 
-                vcf.CHR AS CHR_src, 
-                vcf.POS AS POS_src, 
-                'rs' AS {HM_CC_DSET}
+        joined = con.execute(f"""
+            SELECT
+                ssdf_rsid.*,
+                vcf.CHR AS CHR_src,
+                vcf.POS AS POS_src
             FROM ssdf_rsid
             LEFT JOIN {vcf_view} vcf
             ON ssdf_rsid.{RSID} = vcf.ID
-            WHERE vcf.ID IS NOT NULL
             """).df()
-        
-         # Step 4: Format CHR/POS and save
-        merged_vcf[CHR_DSET] = merged_vcf["CHR_src"].astype("str").str.replace(r"\..*$", "", regex=True)
-        merged_vcf[BP_DSET] = merged_vcf["POS_src"].astype("str").str.replace(r"\..*$", "", regex=True)
-        merged_vcf = merged_vcf[header + [HM_CC_DSET]]  # Add back only needed cols
-        
-        # Step 6: keep the unmapped variants
-        # Unmapped rsIDs
-        ssdf_with_rsid = con.execute(f"""
-                                     SELECT ssdf_rsid.*
-                                     FROM ssdf_rsid
-                                     LEFT JOIN {vcf_view} vcf
-                                     ON ssdf_rsid.{RSID} = vcf.ID
-                                     WHERE vcf.ID IS NULL
-                                     """).df()
+        con.close()
+
+        matched_mask = joined["CHR_src"].notna()
+        matched = joined[matched_mask].copy()
+        ssdf_with_rsid = joined[~matched_mask][ssdf_with_rsid.columns].copy()
+
+        if not matched.empty:
+            matched[CHR_DSET] = matched["CHR_src"].astype("str").str.replace(r"\..*$", "", regex=True)
+            matched[BP_DSET] = matched["POS_src"].astype("str").str.replace(r"\..*$", "", regex=True)
+            matched[HM_CC_DSET] = "rs"
+            merged_vcf = matched[header + [HM_CC_DSET]]
+    else:
         con.close()
 
     print("finished rsid mapping")
@@ -188,22 +184,19 @@ def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate):
 def listify_string(string):
     """
     listify the input. If it's a list leave it.
-    It it looks like at list, make it a list.
-    Otherwise convert the input into a list - which is probably not what's wanted.
+    If it looks like a list literal (contains '[' and ']'), parse it.
+    Otherwise treat the whole string as a single element.
     :param string:
     :return: a list
     """
+    if type(string) is list:
+        return string
     if type(string) is str:
-        if "[" and "]" in string:
-            new=string.replace(" ", "").replace("[", '["').replace("]", '"]').replace(",", '","')
-            listified = literal_eval(new)
-        else:
-            listified = list(string)
-    elif type(string) is list:
-        listified = string
-    else:
-        listified = list(str(string))
-    return listified
+        if "[" in string and "]" in string:
+            new = string.replace(" ", "").replace("[", '["').replace("]", '"]').replace(",", '","')
+            return literal_eval(new)
+        return [string]
+    return [str(string)]
 
 def add_fields_if_missing(df):
     add_column_to_df(df=df, column=RSID)
@@ -223,7 +216,7 @@ def main():
     argparser.add_argument('--log', help='The name of the log file')
     argparser.add_argument('-from_build', help='The original build e.g. "36" for NCBI36 or hg18', required=True)
     argparser.add_argument('-to_build', help='The latest (desired) build e.g. "38"', required=True)
-    argparser.add_argument('-chroms', help='A list of chromosomes to process', default=DEFAULT_CHROMS)
+    argparser.add_argument('-chroms', help='A chromosome or list of chromosomes to process', default=DEFAULT_CHROMS)
     argparser.add_argument('-coordinate', help='index', nargs='?', const="1-based", required=True)
     args = argparser.parse_args()
 
