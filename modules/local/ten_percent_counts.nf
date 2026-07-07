@@ -23,7 +23,10 @@ process ten_percent_counts {
     else n=\$select
     fi
 
-    (head -n 1 $merged; sed '1d' $merged| shuf -n \$n)>ten_percent.${chrom}.merged
+    # Sample randomly then sort by position so tabix fetches are sequential
+    header=\$(head -n 1 $merged)
+    pos_col=\$(echo "\$header" | tr '\\t' '\\n' | grep -nx "base_pair_location" | cut -d: -f1)
+    (echo "\$header"; sed '1d' $merged | shuf -n \$n | sort -t\$'\\t' -k\${pos_col},\${pos_col}n) > ten_percent.${chrom}.merged
 
     header_args=\$(utils.py -f $merged -strand_count_args);
     coordinate_system=\$(grep coordinate_system $yaml | awk -F ":" '{print \$2}' | tr -d "[:blank:]" )
