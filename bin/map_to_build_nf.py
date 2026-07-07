@@ -160,25 +160,19 @@ def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate):
     unmapped_outfile = os.path.join("unmapped")
     unmapped_df.to_csv(unmapped_outfile, sep="\t", index=False, na_rep="NA")
     
-    # 2. Write valid variants per chromosome
-    valid_df = combined_df.dropna(subset=[CHR_DSET, BP_DSET])
-    """ Only chr with variants in input file are written
-    chrom_set = set(normalized_chroms)
-    for chrom, group_df in valid_df.groupby(CHR_DSET, sort=False):
-        if chrom in chrom_set:
-            chrom_str = str(chrom).split(".")[0]
-            out_path = os.path.join("{}.merged".format(chrom_str))
-            group_df.to_csv(out_path, sep="\t", index=False, na_rep="NA", mode='a')
-    """
-    # Write output files for each chroms (nextflow check the number of output == nchr hope to run)
+    # 2. Write valid variants per chromosome, sorted by position so downstream
+    #    tabix fetches are sequential (critical for performance on spinning disks).
+    valid_df = combined_df.dropna(subset=[CHR_DSET, BP_DSET]).copy()
+    valid_df["_bp_int"] = pd.to_numeric(valid_df[BP_DSET], errors="coerce")
+    valid_df = valid_df.sort_values("_bp_int").drop(columns=["_bp_int"])
+
     for chrom in normalized_chroms:
         chrom_str = str(chrom).split(".")[0]
         out_path = os.path.join("{}.merged".format(chrom_str))
         chrom_df = valid_df[valid_df[CHR_DSET] == chrom]
         if not chrom_df.empty:
-            chrom_df.to_csv(out_path, sep="\t", index=False, na_rep="NA", mode='a')
+            chrom_df.to_csv(out_path, sep="\t", index=False, na_rep="NA")
         else:
-            # create an empty file if no variants for this chromosome
             valid_df.head(0).to_csv(out_path, sep="\t", index=False)
 
 def listify_string(string):
