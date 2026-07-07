@@ -10,13 +10,19 @@ process harmonization_log {
 
     input:
     val chr
-    tuple val(GCST), val(mode), path(all_hm), path(qc_result), path(delete_sites), path(count), path(raw_yaml), path(input), path(unmapped)
+    tuple val(GCST), val(mode), path(all_hm), path(qc_result), path(delete_sites), path(count), path(raw_yaml), path(input), path(unmapped_files)
 
     output:
     tuple val(chr), val(GCST), path(raw_yaml), path("${GCST}.h.tsv.gz"), path("${GCST}.h.tsv.gz.tbi"), path ("${GCST}.running.log"), env(result)
 
     shell:
     """
+    # Merge per-chromosome unmapped files into one (keep header from first file)
+    files="!{unmapped_files instanceof List ? unmapped_files.join(' ') : unmapped_files}"
+    first=\$(echo \$files | tr ' ' '\\n' | head -1)
+    head -1 "\$first" > combined_unmapped.tsv
+    for f in \$files; do tail -n+2 "\$f"; done >> combined_unmapped.tsv
+
     # Generating running log
     log_script.sh \
     -r "${params.ref}/homo_sapiens-${chr}.vcf.gz" \
@@ -24,7 +30,7 @@ process harmonization_log {
     -c $count \
     -d $delete_sites \
     -h $all_hm \
-    -u $unmapped \
+    -u combined_unmapped.tsv \
     -o ${GCST}.running.log \
     -p ${params.version}
 
