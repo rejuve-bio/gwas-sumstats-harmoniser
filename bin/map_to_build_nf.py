@@ -37,7 +37,7 @@ while True:
 def normalize_chrom(c):
     return {"23": "X", "24": "Y", "25": "MT"}.get(str(c).upper(), str(c).upper())
 
-def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate):
+def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate, threads=1, memory="4GB"):
 
     """
     Merge GWAS summary stats with reference VCFs by RSID, liftover unmapped variants,
@@ -74,6 +74,8 @@ def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate):
     WHERE {CHR_DSET} IN ({chrom_filter})
     """
     con = duckdb.connect()
+    con.execute(f"SET threads={threads}")
+    con.execute(f"SET memory_limit='{memory}'")
     ssdf = con.execute(query).df()
 
     # handle the empty input file — still create output files so Nextflow output checks pass
@@ -104,26 +106,23 @@ def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate):
         files_sql = "[" + ", ".join(f"'{f}'" for f in vcfs) + "]"
         vcf_view = f"(SELECT * FROM read_parquet({files_sql}, union_by_name=true))"
 
-        joined = con.execute(f"""
-            SELECT
-                ssdf_rsid.*,
-                vcf.CHR AS CHR_src,
-                vcf.POS AS POS_src
+        # INNER JOIN + QUALIFY: one parquet scan, deduplicates multi-chrom rsid hits
+        matched = con.execute(f"""
+            SELECT ssdf_rsid.*, vcf.CHR AS CHR_src, vcf.POS AS POS_src
             FROM ssdf_rsid
-            LEFT JOIN {vcf_view} vcf
-            ON ssdf_rsid.{RSID} = vcf.ID
+            INNER JOIN {vcf_view} vcf ON ssdf_rsid.{RSID} = vcf.ID
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY ssdf_rsid.{RSID} ORDER BY vcf.CHR) = 1
             """).df()
         con.close()
-
-        matched_mask = joined["CHR_src"].notna()
-        matched = joined[matched_mask].copy()
-        ssdf_with_rsid = joined[~matched_mask][ssdf_with_rsid.columns].copy()
 
         if not matched.empty:
             matched[CHR_DSET] = matched["CHR_src"].astype("str").str.replace(r"\..*$", "", regex=True)
             matched[BP_DSET] = matched["POS_src"].astype("str").str.replace(r"\..*$", "", regex=True)
             matched[HM_CC_DSET] = "rs"
             merged_vcf = matched[header + [HM_CC_DSET]]
+            # Identify unmapped rsids via set subtraction (no second parquet scan)
+            mapped_rsids = set(matched[RSID])
+            ssdf_with_rsid = ssdf_with_rsid[~ssdf_with_rsid[RSID].isin(mapped_rsids)].copy()
     else:
         con.close()
 
@@ -212,6 +211,8 @@ def main():
     argparser.add_argument('-to_build', help='The latest (desired) build e.g. "38"', required=True)
     argparser.add_argument('-chroms', help='A chromosome or list of chromosomes to process', default=DEFAULT_CHROMS)
     argparser.add_argument('-coordinate', help='index', nargs='?', const="1-based", required=True)
+    argparser.add_argument('--threads', help='DuckDB thread count', type=int, default=1)
+    argparser.add_argument('--memory', help='DuckDB memory limit e.g. 6GB', type=str, default='4GB')
     args = argparser.parse_args()
 
     ss = args.f
@@ -222,7 +223,7 @@ def main():
     coordinate=args.coordinate
 
 
-    merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate)
+    merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate, args.threads, args.memory)
 
 
 
