@@ -26,8 +26,10 @@ process map_to_build {
     -from_build \$from_build \
     -to_build $params.to_build \
     -vcf "${params.ref}/homo_sapiens-chr${chrom}.parquet" \
-    -chroms "${chrom}" \
-    -coordinate \$coordinate
+    -chroms "[${chrom}]" \
+    -coordinate \$coordinate \
+    --threads !{task.cpus} \
+    --memory "!{(task.memory.toGiga() * 0.75).intValue()}GB"
 
     mv unmapped unmapped_chr${chrom}
     """
