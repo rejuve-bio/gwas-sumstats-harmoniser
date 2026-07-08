@@ -52,7 +52,7 @@ workflow major_direction{
                       .ten_sc
                       .groupTuple(by: 0)
                       .branch{pass:it[1].size()==nchr}
-                      .map{it[0]}
+                      .pass.map{it[0]}
 
     // example: ten_to_sum [GCST1],[GCST2].....
     ten_percent_counts_sum(ten_to_sum)
