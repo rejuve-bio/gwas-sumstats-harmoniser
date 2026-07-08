@@ -12,7 +12,7 @@ import pysam
 import sys
 import gzip
 import argparse
-from collections import OrderedDict, Counter
+from collections import OrderedDict, Counter, defaultdict
 from lib.SumStatRecord import SumStatRecord
 from lib.VCFRecord import VCFRecord
 from gwas_sumstats_tools.interfaces.data_table import SumStatsTable
@@ -37,15 +37,40 @@ def main():
             out_header.remove("neg_log_10_p_value")
             tag_neg_log_10_p_value=True
     
-    #######YUE################
-    tbx=pysam.TabixFile(args.vcf)
-    #######YUE################
+    tbx = pysam.TabixFile(args.vcf)
 
-    
-    
+    # --- VCF position cache ---
+    # Pass 1: preload all sumstat records to collect needed VCF positions.
+    # This eliminates N random tabix seeks (one per variant) in the main loop,
+    # replacing them with a single sequential VCF scan + O(1) dict lookups.
+    all_ss_recs = list(yield_sum_stat_records(args.sumstats, args.in_sep))
+    is_0base = (int(args.coordinate[0]) == 0)
+    needed_positions = set()
+    for _rec in all_ss_recs:
+        if _rec.pos:
+            try:
+                p = int(_rec.pos)
+                needed_positions.add(p)
+                if is_0base:
+                    needed_positions.add(p - 1)  # 0-based indel offset
+            except (ValueError, TypeError):
+                pass
+
+    # Pass 2: one sequential scan of the chromosome VCF — O(n) I/O instead
+    # of O(n) random seeks. Cache only positions present in the sumstats file.
+    vcf_cache = defaultdict(list)
+    try:
+        chrom_for_fetch = tbx.contigs[0] if tbx.contigs else None
+        for vcf_line in (tbx.fetch(chrom_for_fetch) if chrom_for_fetch else tbx.fetch()):
+            fields = vcf_line.split('\t')
+            pos = int(fields[1])
+            if pos in needed_positions:
+                vcf_cache[pos].append(VCFRecord(list(fields)))
+    except Exception:
+        vcf_cache = None  # fall back to per-variant tabix on any error
+
     # Process each row in summary statistics
-    for counter, ss_rec in enumerate(yield_sum_stat_records(args.sumstats,
-                                                            args.in_sep)):
+    for counter, ss_rec in enumerate(all_ss_recs):
         # If set to only process 1 chrom, skip none matching chroms
         if args.only_chrom and not args.only_chrom == ss_rec.chrom:
             continue
@@ -56,34 +81,33 @@ def main():
             ss_rec.hm_code = ret_code
             strand_counter['Invalid variant for harmonisation'] += 1
 
-        # # DEBUG print progress
-        # if counter % 1000 == 0:
-        #     print(counter + 1)
-
         #
         # Load and filter VCF records ------------------------------------------
         #
 
         # Skip rows that have code 14 (fail validation)
         if not ss_rec.hm_code:
-            # Get VCF reference variants for this recordls
-            coordinate=args.coordinate
-            if int(coordinate[0])==0 and ss_rec.lifmethod=="lo":
-                if len(str(ss_rec.effect_al))+len(str(ss_rec.other_al))>2: 
-                    vcf_recs =get_vcf_records_0base(
-                        tbx,
-                        ss_rec.chrom,
-                        ss_rec.pos)
-                else:
-                    vcf_recs = get_vcf_records(
-                    tbx,
-                    ss_rec.chrom,
-                    ss_rec.pos)
+            coordinate = args.coordinate
+            if vcf_cache is not None:
+                try:
+                    pos_int = int(ss_rec.pos)
+                    if int(coordinate[0]) == 0 and ss_rec.lifmethod == "lo" and \
+                       len(str(ss_rec.effect_al)) + len(str(ss_rec.other_al)) > 2:
+                        vcf_recs = list(vcf_cache.get(pos_int - 1, [])) + \
+                                   list(vcf_cache.get(pos_int, []))
+                    else:
+                        vcf_recs = list(vcf_cache.get(pos_int, []))
+                except (ValueError, TypeError):
+                    vcf_recs = []
             else:
-                vcf_recs = get_vcf_records(
-                    tbx,
-                    ss_rec.chrom,
-                    ss_rec.pos)
+                # Fallback: per-variant tabix query
+                if int(coordinate[0]) == 0 and ss_rec.lifmethod == "lo":
+                    if len(str(ss_rec.effect_al)) + len(str(ss_rec.other_al)) > 2:
+                        vcf_recs = get_vcf_records_0base(tbx, ss_rec.chrom, ss_rec.pos)
+                    else:
+                        vcf_recs = get_vcf_records(tbx, ss_rec.chrom, ss_rec.pos)
+                else:
+                    vcf_recs = get_vcf_records(tbx, ss_rec.chrom, ss_rec.pos)
             # Extract the VCF record that matches the summary stat record
             vcf_rec, ret_code = exract_matching_record_from_vcf_records(
                 ss_rec, vcf_recs)
@@ -184,19 +208,17 @@ def main():
                     value = ss_rec.data[key] if ss_rec.data[key] else args.na_rep_out
                     out_raw[key] = str(value)
 
-            generated_new_header=["hm_code","variant_id","rsid"]
-            add_header=[x for x in generated_new_header if x not in out_header]
-            new_order=out_header+add_header
-            out_row = OrderedDict((k, out_raw[k]) for k in new_order)
-
-            # Write header
+            # Write header (computed once; new_order reused for all rows)
             if not header_written:
-                outline = args.out_sep.join([str(x) for x in out_row.keys()]) + "\n"
+                generated_new_header = ["hm_code", "variant_id", "rsid"]
+                add_header = [x for x in generated_new_header if x not in out_header]
+                new_order = out_header + add_header
+                outline = args.out_sep.join(new_order) + "\n"
                 out_handle.write(outline.encode("utf-8"))
                 header_written = True
 
-            # Write row
-            outline = args.out_sep.join([str(x) for x in out_row.values()]) + "\n"
+            # Write row using precomputed column order (avoids OrderedDict rebuild per row)
+            outline = args.out_sep.join(str(out_raw.get(k, args.na_rep_out)) for k in new_order) + "\n"
             out_handle.write(outline.encode("utf-8"))
             
 
@@ -670,34 +692,27 @@ def af_to_maf(af):
 def get_vcf_records(tbx, chrom, pos):
     """ Uses tabix to query VCF file. Parses info from record.
     Args:
-        in_vcf (str): vcf file
+        tbx: pysam TabixFile
         chrom (str): chromosome
-        pos (int): base pair position
+        pos (int): base pair position (1-based)
     Returns:
         list of VCFRecords
     """
-    #######YUE################
-    result=tbx.fetch(chrom, int(pos)-1, int(pos))
-    # each records returned by fetch is str, it needs to be change into list for VCF records to process
-    response=[list(n.split("\t")) for n in result]
-    #######YUE################
-    return [VCFRecord(line) for line in response]
+    result = tbx.fetch(chrom, int(pos)-1, int(pos))
+    return [VCFRecord(list(n.split("\t"))) for n in result]
+
 
 def get_vcf_records_0base(tbx, chrom, pos):
-    """ Uses tabix to query VCF file. Parses info from record.
+    """ Uses tabix to query VCF file for 0-based coordinate variants (indels).
     Args:
-        in_vcf (str): vcf file
+        tbx: pysam TabixFile
         chrom (str): chromosome
-        pos (int): base pair position
+        pos (int): base pair position (0-based)
     Returns:
         list of VCFRecords
     """
-    #######YUE################
-    result=tbx.fetch(chrom, int(pos)-2, int(pos))
-    # each records returned by fetch is str, it needs to be change into list for VCF records to process
-    response=[list(n.split("\t")) for n in result]
-    #######YUE################
-    return [VCFRecord(line) for line in response]
+    result = tbx.fetch(chrom, int(pos)-2, int(pos))
+    return [VCFRecord(list(n.split("\t"))) for n in result]
 
 def yield_sum_stat_records(inf, sep):
     """ Load lines from summary stat file and convert to SumStatRecord class.
