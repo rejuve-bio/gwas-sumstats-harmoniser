@@ -5,9 +5,9 @@
 # if variant_id is rsid and ID != variant_id or not synonym --> drop and create discrep df
 
 
-import duckdb
 from functools import lru_cache
 import pandas as pd
+import pyarrow.dataset as ds
 
 import liftover as lft
 from common_constants import *
@@ -53,30 +53,20 @@ def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate, threads=1, m
     """
 
     vcfs = glob.glob(vcf)
-    # read input sumstats file using the duckdb and convert the 23,24,25 into X,Y,MT in the chromsome column
     normalized_chroms = [normalize_chrom(c) for c in chroms]
-    chrom_filter = ",".join(f"'{c}'" for c in normalized_chroms)
 
-    query = f"""
-    SELECT *
-    FROM (
-    SELECT
-      CASE
-        WHEN CAST({CHR_DSET} AS VARCHAR) = '23' THEN 'X'
-        WHEN CAST({CHR_DSET} AS VARCHAR) = '24' THEN 'Y'
-        WHEN CAST({CHR_DSET} AS VARCHAR) = '25' THEN 'MT'
-        ELSE CAST({CHR_DSET} AS VARCHAR)
-      END AS {CHR_DSET},
-      *
-    EXCLUDE {CHR_DSET}
-    FROM read_csv_auto('{ss}', SAMPLE_SIZE=-1, nullstr=['NA', 'NaN', '', 'nan', '#NA'])
-    ) mapped
-    WHERE {CHR_DSET} IN ({chrom_filter})
-    """
-    con = duckdb.connect()
-    con.execute(f"SET threads={threads}")
-    con.execute(f"SET memory_limit='{memory}'")
-    ssdf = con.execute(query).df()
+    # Read sumstats with pandas; normalise chromosome column
+    chr_remap = {"23": "X", "24": "Y", "25": "MT"}
+    ssdf = pd.read_csv(
+        ss, sep="\t", dtype=str,
+        na_values=["NA", "NaN", "", "nan", "#NA"],
+        low_memory=False,
+    )
+    if CHR_DSET in ssdf.columns:
+        ssdf[CHR_DSET] = ssdf[CHR_DSET].astype(str).str.upper().map(
+            lambda x: chr_remap.get(x, x)
+        )
+        ssdf = ssdf[ssdf[CHR_DSET].isin(normalized_chroms)]
 
     # handle the empty input file — still create output files so Nextflow output checks pass
     if ssdf.empty:
@@ -96,35 +86,35 @@ def merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate, threads=1, m
     print("starting rsid mapping")
     print("ssdf with rsid empty?: {}".format(ssdf_with_rsid.empty))
 
-    # Single-pass LEFT JOIN: matched rows get CHR_src/POS_src, unmatched get NULL.
-    # This replaces the previous two-query pattern (join + anti-join) and halves
-    # the number of parquet scans.
+    # Use PyArrow dataset with is_in predicate pushdown — reads only rows whose
+    # ID matches one of the rsIDs we need, never loading the full parquet into RAM.
     merged_vcf = pd.DataFrame()
     if not ssdf_with_rsid.empty:
-        con.register("ssdf_rsid", ssdf_with_rsid)
+        rsid_list = ssdf_with_rsid[RSID].dropna().tolist()
 
-        files_sql = "[" + ", ".join(f"'{f}'" for f in vcfs) + "]"
-        vcf_view = f"(SELECT * FROM read_parquet({files_sql}, union_by_name=true))"
+        ref_parts = []
+        for vcf_path in vcfs:
+            ref_table = ds.dataset(vcf_path).to_table(
+                filter=ds.field("ID").isin(rsid_list),
+                columns=["ID", "CHR", "POS"],
+            )
+            if ref_table.num_rows > 0:
+                ref_parts.append(ref_table.to_pandas())
 
-        # INNER JOIN + QUALIFY: one parquet scan, deduplicates multi-chrom rsid hits
-        matched = con.execute(f"""
-            SELECT ssdf_rsid.*, vcf.CHR AS CHR_src, vcf.POS AS POS_src
-            FROM ssdf_rsid
-            INNER JOIN {vcf_view} vcf ON ssdf_rsid.{RSID} = vcf.ID
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY ssdf_rsid.{RSID} ORDER BY vcf.CHR) = 1
-            """).df()
-        con.close()
+        if ref_parts:
+            ref_df = pd.concat(ref_parts, ignore_index=True)
+            # Deduplicate multi-chrom rsid hits — keep first (same as QUALIFY ROW_NUMBER()=1)
+            ref_df = ref_df.drop_duplicates(subset=["ID"], keep="first")
 
-        if not matched.empty:
-            matched[CHR_DSET] = matched["CHR_src"].astype("str").str.replace(r"\..*$", "", regex=True)
-            matched[BP_DSET] = matched["POS_src"].astype("str").str.replace(r"\..*$", "", regex=True)
-            matched[HM_CC_DSET] = "rs"
-            merged_vcf = matched[header + [HM_CC_DSET]]
-            # Identify unmapped rsids via set subtraction (no second parquet scan)
-            mapped_rsids = set(matched[RSID])
-            ssdf_with_rsid = ssdf_with_rsid[~ssdf_with_rsid[RSID].isin(mapped_rsids)].copy()
-    else:
-        con.close()
+            matched = ssdf_with_rsid.merge(ref_df, left_on=RSID, right_on="ID", how="inner")
+
+            if not matched.empty:
+                matched[CHR_DSET] = matched["CHR"].astype(str).str.replace(r"\..*$", "", regex=True)
+                matched[BP_DSET] = matched["POS"].astype(str).str.replace(r"\..*$", "", regex=True)
+                matched[HM_CC_DSET] = "rs"
+                merged_vcf = matched[header + [HM_CC_DSET]]
+                mapped_rsids = set(matched[RSID])
+                ssdf_with_rsid = ssdf_with_rsid[~ssdf_with_rsid[RSID].isin(mapped_rsids)].copy()
 
     print("finished rsid mapping")
     # liftover the snps without rsids and those with unrecognised rsids 
@@ -211,8 +201,6 @@ def main():
     argparser.add_argument('-to_build', help='The latest (desired) build e.g. "38"', required=True)
     argparser.add_argument('-chroms', help='A chromosome or list of chromosomes to process', default=DEFAULT_CHROMS)
     argparser.add_argument('-coordinate', help='index', nargs='?', const="1-based", required=True)
-    argparser.add_argument('--threads', help='DuckDB thread count', type=int, default=1)
-    argparser.add_argument('--memory', help='DuckDB memory limit e.g. 6GB', type=str, default='4GB')
     args = argparser.parse_args()
 
     ss = args.f
@@ -220,10 +208,9 @@ def main():
     from_build = args.from_build
     to_build = args.to_build
     chroms = listify_string(args.chroms)
-    coordinate=args.coordinate
+    coordinate = args.coordinate
 
-
-    merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate, args.threads, args.memory)
+    merge_ss_vcf(ss, vcf, from_build, to_build, chroms, coordinate)
 
 
 
