@@ -8,20 +8,27 @@ workflow major_direction{
     take:
     chr
     files
-    
+
     main:
-    //input: val(GCST), val(from_build), path(tsv), chr
-    chroms=chr.flatten().map{it.toString().replaceAll("chr","")}.collect()
-    map_to_build(files,chroms)
-    //example: output is [GCST1,[path of 1.merged, path of 2.merged .....]]
+    // Emit one value per chromosome (no collect) so map_to_build runs in parallel
+    chroms = chr.flatten().map { it.toString().replaceAll("chr","") }
+
+    // Cross-product: every (study, chrom) pair becomes an independent process
+    files_x_chroms = files.combine(chroms)
+    //  [GCST, yaml, tsv, chrom]
+    map_to_build(files_x_chroms)
+
+    // output: [GCST, chrom, chrom.merged, unmapped, yaml]
     map_to_build.out.mapped
-                    .transpose()
-                    .map{tuple(get_chr(it[1]),it[0],it[1],it[3])}
-                    .set{map_chr_ch}
-    // capture unmapped sites for reporting
-    unmapped = map_to_build.out.mapped.map{tuple(it[0],it[2])}
+                    .map { tuple("chr${it[1]}", it[0], it[2], it[4]) }
+                    .set { map_chr_ch }
+
+    // Collect per-chrom unmapped files into one list per GCST
+    unmapped = map_to_build.out.mapped
+                    .map { tuple(it[0], it[3]) }
+                    .groupTuple(by: 0)
     
-    //example: out of map_to_build [GCST010681,[1,2,...]] tranpose into [[GCST010681,path 1.merged],[GCST010681,path 2.merged]] and then into [chr1,GCST010681,path 1.merged][chr2,GCST010681,path 2.merged].....
+    // map_to_build now runs per-chromosome in parallel; each emits [GCST, chrom, merged, unmapped, yaml]
     
     Channel.fromPath("${params.ref}/homo_sapiens-chr*.vcf.gz") 
            .map { prepare_reference (it) }
@@ -45,7 +52,7 @@ workflow major_direction{
                       .ten_sc
                       .groupTuple(by: 0)
                       .branch{pass:it[1].size()==nchr}
-                      .map{it[0]}
+                      .pass.map{it[0]}
 
     // example: ten_to_sum [GCST1],[GCST2].....
     ten_percent_counts_sum(ten_to_sum)

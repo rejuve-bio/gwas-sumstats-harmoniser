@@ -5,3 +5,11 @@ logs
 .venv
 __pycache__
 *.pyc
+
+CLAUDE.md
+
+.nextflow.log*
+
+/random_name
+
+/.nextflow
